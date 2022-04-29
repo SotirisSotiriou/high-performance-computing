@@ -101,11 +101,6 @@ int main(int argc, char* argv[]){
 	if(my_rank == 0) MPI_Gatherv(local_places, local_n, MPI_INT, places, counts, displacements, MPI_INT, 0, MPI_COMM_WORLD);
 	else MPI_Gatherv(local_places, local_n, MPI_INT, NULL, NULL, NULL, MPI_INT, 0, MPI_COMM_WORLD);
 	
-/*
-	int err = MPI_Gather(local_places, local_n, MPI_INT, places, local_n, MPI_INT, 0, MPI_COMM_WORLD);
-	if(err) MPI_Abort(MPI_COMM_WORLD, err);
-*/
-	
 	
 	if(my_rank == 0){
 		y = malloc(n*sizeof(int));
@@ -113,7 +108,6 @@ int main(int argc, char* argv[]){
 			y[places[i]] = x[i];
 		}	
 		
-		/*
 		//validate result
 		bool correct = true;
 		for(i=1; i<n; i++){
@@ -125,7 +119,6 @@ int main(int argc, char* argv[]){
 		printf("The sorting result is ");
 		if(correct) printf("correct\n");
 		else printf("not correct\n");
-		*/
 		
 		printf("Count sort with %d processes took %f seconds\n", comm_sz, elapsed);
 	}
