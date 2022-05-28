@@ -3,34 +3,79 @@
 #include <string.h>
 #include <cuda.h>
 
-__global__ void string_matching(char *buffer, char *pattern, int match_size, int pattern_size, int *match){
-    int tid, i;
+#define MAX_THREADS_PER_BLOCK 100
 
-    for(tid=blockIdx.x*blockDim.x+threadIdx.x; tid<match_size; tid+=blockDim.x){
+__global__ void string_matching(char *buffer, char *pattern, int match_size, int pattern_size, int blocks, int slice, int extra, int *gout){
+    int tid, i;
+    int thread_index = blockIdx.x*blockDim.x + threadIdx.x;
+    int start = thread_index*slice;
+    int stop = start + slice;
+    if(thread_index == blocks*blockDim.x - 1){
+        stop += extra;
+    }
+    if(stop > match_size){
+        stop = match_size;
+    }
+    __shared__ int r[MAX_THREADS_PER_BLOCK];
+    int sum = 0;
+
+    for(tid=start; tid<stop; tid++){
         for (i = 0; i < pattern_size && pattern[i] == buffer[i + tid]; ++i);
         if(i >= pattern_size){
-            match[tid] = 1;
+            sum++;
         }
-        else{
-            match[tid] = 0;
+    }
+
+    r[threadIdx.x] = sum;
+
+    __syncthreads();
+    
+    //for debugging
+    //printf("Block: %d, Thread: %d, Global Thread: %d, Start: %d, Stop: %d, Matches: %d, Block Matches: %d\n", blockIdx.x, threadIdx.x, thread_index, start, stop, r[threadIdx.x], r[0]);
+
+    //works only for power of 2 threads_per_block
+    //example image url: https://i.stack.imgur.com/jjQvK.png
+    // for (int size = blockDim.x/2; size>0; size/=2) { //uniform
+    //     if (threadIdx.x<size)
+    //         r[threadIdx.x] += r[threadIdx.x+size];
+    //     __syncthreads();
+    // }
+
+    //adds the next thread's result to the previous and all reduces to 0 thread
+    //example image url: https://i.stack.imgur.com/9s8NN.png
+    for(int size = blockDim.x-2; size>=0; size--){
+        if(threadIdx.x == size){
+            r[threadIdx.x] += r[threadIdx.x+1];
         }
+        __syncthreads();
+    }
+
+    //for debugging
+    // if(threadIdx.x == 0){
+    //     printf("Block %d matches: %d\n", blockIdx.x, r[0]);
+    // }
+
+
+    if(threadIdx.x == 0){
+        gout[blockIdx.x] = r[0];
     }
 
 }
 
 
 int main(int argc, char *argv[]){
-    FILE *pFile;
     int i;
+    FILE *pFile;
 	long file_size, match_size, pattern_size;
 	char * buffer;
 	char * filename, *pattern;
 	size_t result;
-	int *match, total_matches;
+    int *results;
+	int total_matches;
 
     //CUDA variables
-    int blocks, threads_per_block;
-    int *match_dev;
+    int blocks, threads_per_block, total_threads, slice, extra;
+    int *results_dev;
     char *buffer_dev, *pattern_dev;
 
     float total_time, comp_time;
@@ -68,11 +113,10 @@ int main(int argc, char *argv[]){
 	
 	pattern_size = strlen(pattern);
 	match_size = file_size - pattern_size + 1;
-	
-	match = (int *) malloc (sizeof(int)*match_size);
-	if (match == NULL) {printf ("Malloc error\n"); return 5;}
 
-    cudaMalloc((void **)&match_dev, match_size*sizeof(int));
+    results = (int *)malloc(blocks*sizeof(int));
+
+    cudaMalloc((void **)&results_dev, blocks*sizeof(int));
     cudaMalloc((void **)&buffer_dev, file_size*sizeof(char));
     cudaMalloc((void **)&pattern_dev, pattern_size*sizeof(char));
 
@@ -83,25 +127,28 @@ int main(int argc, char *argv[]){
     cudaMemcpy(buffer_dev, buffer, file_size*sizeof(char), cudaMemcpyHostToDevice);
     cudaMemcpy(pattern_dev, pattern, pattern_size*sizeof(char), cudaMemcpyHostToDevice);
 
-    string_matching<<<blocks, threads_per_block>>>(buffer_dev, pattern_dev, match_size, pattern_size, match_dev);
-    cudaThreadSynchronize();
+    total_threads = blocks*threads_per_block;
+    slice = match_size/total_threads;
+    extra = match_size%total_threads;
+
+    string_matching<<<blocks, threads_per_block>>>(buffer_dev, pattern_dev, match_size, pattern_size, blocks, slice, extra, results_dev);
 
     cudaEventRecord(comp_stop);
     cudaEventSynchronize(comp_stop);
     cudaEventElapsedTime(&comp_time, comp_start, comp_stop);
 
-    cudaMemcpy(match, match_dev, match_size*sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(results, results_dev, blocks*sizeof(int), cudaMemcpyDeviceToHost);
+
+    total_matches = 0;
+    for(i=0; i<blocks; i++){
+        total_matches += results[i];
+    }
 
     cudaEventRecord(total_stop);
     cudaEventSynchronize(total_stop);
     cudaEventElapsedTime(&total_time, total_start, total_stop);
 
-    total_matches = 0;
-    for(i=0; i<match_size; i++){
-        total_matches += match[i];
-    }
-
-    cudaFree(match_dev);
+    cudaFree(results_dev);
     cudaFree(buffer_dev);
     cudaFree(pattern_dev);
 
