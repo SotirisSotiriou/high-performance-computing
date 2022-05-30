@@ -5,21 +5,27 @@
 #define N 128
 #define base 0
 
-__global__ void char_freq(char *buffer, int *freq, int buffersize){
-    int tid; 
-    __shared__ int temp[N];
+__global__ void char_freq(char *buffer, int *freq, int buffersize, int blocks, int slice, int extra){
+    int i, j;
+    int thread_index = blockIdx.x*blockDim.x + threadIdx.x;
+    int start = thread_index*slice;
+    int stop = start + slice;
+    if(thread_index == blocks*blockDim.x - 1){
+        stop += extra;
+    }
+    if(stop > buffersize){
+        stop = buffersize;
+    }
+    int temp[N];
 
     //Cyclic calculation of block local frequences
-    for(tid=blockIdx.x*blockDim.x+threadIdx.x; tid<buffersize; tid+=blockDim.x){
-        atomicAdd(&temp[buffer[tid]-base], 1); //used for thread synchronization
+    for(i=start; i<stop; i++){
+        temp[buffer[i]-base]++; //used for thread synchronization
     }
 
     //reduce temp results to freq
-    if(threadIdx.x == 0){
-        int j;
-        for(j=0; j<N; j++){
-            atomicAdd(&freq[j], temp[j]);
-        }
+    for(j=0; j<N; j++){
+        atomicAdd(&freq[j], temp[j]);
     }
 }
 
@@ -84,7 +90,11 @@ int main(int argc, char *argv[]){
 
     cudaEventRecord(comp_start);
 
-    char_freq<<<total_blocks, threads_per_block>>>(buffer_dev, freq_dev, file_size);
+    total_threads = total_blocks*threads_per_block;
+    slice = file_size/total_threads;
+    extra = file_size%total_threads;
+
+    char_freq<<<total_blocks, threads_per_block>>>(buffer_dev, freq_dev, file_size, total_blocks, slice, extra);
 
     cudaEventRecord(comp_stop);
     cudaEventSynchronize(comp_stop);
