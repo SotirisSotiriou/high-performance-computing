@@ -3,6 +3,11 @@
 output=./outputs.txt
 filename=./input.txt
 pattern=pi
+filesize=1000000
+
+make
+
+./produce $filename $filesize
 
 for blocks in 10 50 100
 do
@@ -12,3 +17,5 @@ do
         sleep 1
     done
 done
+
+make clean
